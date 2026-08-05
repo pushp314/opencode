@@ -1,85 +1,215 @@
 # Athena CLI Foundation
 
-This repository is the CLI-only runtime extracted from OpenCode. It retains interactive and non-interactive command execution, configuration, providers, streaming, tools, durable sessions, the local HTTP control surface, and the OpenTUI terminal renderer. Web, desktop, hosted-console, documentation-site, extension, infrastructure, benchmark, test, and example products have been removed.
+## Project Overview
 
-Athena is not implemented here. The current runtime remains functional and is deliberately kept as the migration baseline.
+This is the CLI-only OpenCode runtime retained as the baseline for later Athena work. It provides command parsing, configuration, local state, sessions, providers, tools, streaming, the terminal renderer, and a local HTTP control surface. Athena features are intentionally out of scope.
 
-## Build and development
+The runtime is TypeScript executed and compiled by Bun 1.3.14; it is not a Go application.
 
-Install Bun 1.3.14, then run:
+## Architecture
+
+`packages/opencode` is the composition root. Its commands use the location-scoped runtime, which loads configuration and durable state, starts the local server when needed, and exposes it through the SDK client. Provider requests are normalized by `llm`; session events drive both persistence and terminal output.
+
+```mermaid
+flowchart LR
+  CLI[CLI entry: src/index.ts] --> Commands[Command registration]
+  Commands --> Runtime[App / instance runtime]
+  Runtime --> Config[Configuration]
+  Runtime --> Server[Local HTTP server]
+  Commands --> Session[Durable session]
+  Session --> Providers[Providers + llm]
+  Session --> Tools[Tool registry]
+  Providers --> Stream[Normalized event stream]
+  Stream --> Renderer[CLI / OpenTUI renderer]
+  Renderer --> Exit[Clean exit]
+```
+
+## Repository Structure
+
+```text
+packages/
+  opencode/                 Core CLI, commands, configuration, sessions, tools, local server
+  core/                     Durable state, filesystem, providers, project and runtime primitives
+  tui/                      OpenTUI renderer and terminal interaction runtime
+  server/                   Local HTTP API control surface
+  protocol/                 Shared HTTP API contracts
+  schema/                   Shared schemas
+  llm/                      Provider transport and stream normalization
+  plugin/                   Plugin and terminal-extension contracts
+  codemode/                 Confined code-execution tool runtime
+  sdk/js/                   Local API client
+  effect-drizzle-sqlite/    SQLite Effect/Drizzle adapter
+  effect-sqlite-node/       Node SQLite adapter
+  script/                   Build metadata helpers
+patches/                    Required third-party dependency patches
+athena-migration/           Historical extraction reports
+```
+
+## CLI Flow
+
+```mermaid
+sequenceDiagram
+  participant User
+  participant CLI as src/index.ts
+  participant Cmd as command handler
+  participant Runtime
+  participant Session
+  participant Model
+  participant TUI as renderer
+
+  User->>CLI: opencode run "prompt"
+  CLI->>Cmd: parse and dispatch
+  Cmd->>Runtime: load app + project instance
+  Runtime->>Session: create or resume durable session
+  Session->>Model: resolve provider and stream request
+  Model-->>Session: text and tool events
+  Session-->>TUI: persisted stream events
+  TUI-->>User: terminal output
+  Cmd->>Runtime: dispose instance
+```
+
+## Startup Flow
+
+1. `packages/opencode/src/index.ts` registers yargs commands, flags, help, and version output.
+2. `effectCmd` starts `AppRuntime`; commands needing project state load an `InstanceStore` context.
+3. Configuration, plugins, models, storage, and tool registries are resolved in that context.
+4. `run` starts or attaches to the local server, then creates or resumes a durable session.
+5. The session processor resolves the model, executes tools, consumes one normalized provider stream, and emits terminal events.
+6. The command disposes its instance; `serve` also stops its listener on SIGINT or SIGTERM before exiting.
+
+## Configuration
+
+Configuration resolves from the normal OpenCode locations. Inspect the effective config without plugins:
+
+```sh
+bun run --cwd packages/opencode src/index.ts --pure debug config
+```
+
+Use `--pure` for reproducible local diagnostics. Provider credentials may be configured through the supported provider commands or environment variables; never commit them.
+
+## Commands
+
+```sh
+opencode --help
+opencode --version
+opencode debug config
+opencode providers list
+opencode models [provider]
+opencode session list --format json
+opencode run "Explain this repository"
+opencode serve --hostname 127.0.0.1 --port 4096
+```
+
+`run` supports session resumption, JSON event output, file attachments, model selection, and tool execution. `serve` is the headless local control surface.
+
+## Build
+
+Install Bun 1.3.14 and dependencies:
 
 ```sh
 bun install
 bun run typecheck
-bun run dev -- --help
 bun run build
 ```
 
-`bun run build` builds the current-platform CLI binary without embedding a browser UI. Run `bun run --cwd packages/opencode dev -- --help` for direct command discovery.
+The build compiles the current-platform binary to `packages/opencode/dist/` and smoke-tests its version command.
 
-## Repository structure
+## Run
 
-```text
-packages/
-  opencode/                 CLI entrypoint, commands, runtime composition, sessions, tools
-  tui/                      OpenTUI terminal renderer and interaction runtime
-  core/                     durable state, configuration, providers, filesystem and tool primitives
-  server/                   local CLI HTTP control surface
-  protocol/                 HTTP API contracts
-  schema/                   shared runtime schemas
-  llm/                      provider transport and stream normalization
-  plugin/                   plugin and terminal-extension contracts
-  codemode/                 confined code-execution tool runtime
-  sdk/js/                   local API client used by the CLI and TUI
-  effect-drizzle-sqlite/    SQLite Effect/Drizzle adapter
-  effect-sqlite-node/       Node SQLite adapter
-  script/                   build metadata helpers
-patches/                    required runtime dependency patches
+During development:
+
+```sh
+bun run dev -- --help
+bun run --cwd packages/opencode dev -- --pure run "Hello"
 ```
 
-## CLI architecture and dependency graph
+Run the built binary directly:
 
-```text
-opencode CLI
- ├─ terminal UI ─────────────── tui ──────── plugin, sdk
- ├─ command/runtime/session ─── core ─────── schema, llm, plugin, SQLite adapters
- ├─ streaming/model execution ─ llm ──────── schema
- ├─ local control API ───────── server ───── core, protocol
- ├─ API contracts ───────────── protocol ─── schema
- ├─ sandboxed code tool ─────── codemode
- └─ local API client ────────── sdk
+```sh
+./packages/opencode/dist/opencode-darwin-arm64/bin/opencode --help
 ```
 
-All edges above are runtime imports or package dependencies reachable from `packages/opencode/src/index.ts`. Provider SDKs remain because provider selection is dynamic configuration, so their reachability cannot be safely inferred from a single startup path.
+The binary directory is platform-specific.
 
-## Startup sequence
+## Debug
 
-1. `packages/opencode/src/index.ts` parses CLI flags and selects a command.
-2. Command bootstrap creates a location-scoped runtime and loads configuration.
-3. The CLI starts its local server and connects the SDK client.
-4. TUI or run commands create/resume durable sessions.
-5. The session processor resolves an agent, tools, and provider, then consumes one normalized LLM event stream.
-6. Events update session state and render through OpenTUI.
+```sh
+opencode debug info
+opencode debug paths
+opencode debug config
+opencode --print-logs --log-level DEBUG run "diagnose startup"
+```
 
-## Development workflow
+## Development Workflow
 
-Keep changes inside the runtime dependency graph. Run `bun run typecheck` from the affected package and build the CLI after entrypoint, provider, session, server, or terminal changes. The repository intentionally has no in-tree test suite or browser build; validation is typecheck, binary build, and CLI smoke execution.
+Run type checks from the affected package, never from the repository root:
 
-## Athena extension points
+```sh
+bun run --cwd packages/opencode typecheck
+bun run --cwd packages/core typecheck
+```
 
-These seams are retained, functional, and intentionally not replaced:
+After a public Protocol or Server HttpApi change, run `bun run generate` from `packages/client` when that package is present. Regenerate the legacy JavaScript SDK with `./packages/sdk/js/script/build.ts` when its public API changes. Do not edit generated SDK source directly.
 
-| Future Athena system | Current seam |
+## Dependency Graph
+
+```mermaid
+flowchart TD
+  Schema[schema]
+  LLM[llm] --> Schema
+  Protocol[protocol] --> Schema
+  Core[core] --> Schema
+  Core --> LLM
+  Core --> Plugin[plugin]
+  Core --> SQLite[SQLite adapters]
+  Server[server] --> Core
+  Server --> Protocol
+  TUI[tui] --> Core
+  TUI --> Plugin
+  TUI --> SDK[sdk]
+  CLI[opencode] --> Core
+  CLI --> Server
+  CLI --> TUI
+  CLI --> Protocol
+  CLI --> LLM
+  CLI --> Plugin
+  CLI --> SDK
+  CLI --> CodeMode[codemode]
+```
+
+All 13 workspace packages resolve through Bun's workspace installation. The workspace package graph has no package-to-package cycle. Provider SDK dependencies remain intentionally: provider selection is configuration-driven and cannot be proven unused from a single CLI startup path.
+
+## Validation Report
+
+Validated on 2026-08-05 with Bun 1.3.14:
+
+- Forced workspace typecheck: 12 of 12 runnable package tasks passed.
+- CLI source `--help`, compiled binary `--version`, configuration loading, credential/provider discovery, model command, and empty session listing passed.
+- Current-platform production build passed, including its built-in binary smoke test.
+- An isolated `run --format json` workflow created a durable session, initialized a configured provider, streamed events, ran built-in `grep` tools, persisted the session, and exited with status 0.
+- An isolated `serve` workflow started on loopback and, after the shutdown repair, stopped its listener and exited with status 0 on SIGTERM.
+- `bun pm ls` resolved all 13 workspace packages with no missing workspace dependency.
+
+### Dead-Code Assessment
+
+No source file was removed. The safe-removal standard requires proving a file is unimported, never executed through dynamic command/plugin/provider paths, unnecessary for compilation and configuration, and unnecessary to CLI validation. The retained command, provider, plugin, tool, server, and renderer code is dynamically reachable or cannot be proven otherwise; deleting it would be speculative.
+
+## Known Limitations
+
+- A real model turn requires configured credentials or an available authenticated provider. Validation uses the active configured provider; credentials are not stored in this repository.
+- The repository intentionally has no in-tree test suite; validation is typecheck, production build, and CLI runtime smoke workflows.
+- A module-level static scan reports legacy internal import cycles inside the retained runtime. The workspace package graph is acyclic. Removing those internal cycles would require broad architectural rewrites, which are outside this CLI-stabilization scope.
+- This checkout has no `packages/client`, so no protocol code generation was required during this work.
+
+## Future Athena Integration Points
+
+| Athena system | Existing seam |
 | --- | --- |
-| Context Engine | `packages/core/src/system-context` and `packages/opencode/src/session/instruction.ts` |
+| Context Engine | `packages/core/src/system-context`, `packages/opencode/src/session/instruction.ts` |
 | Memory | `packages/opencode/src/session` durable state and prompts |
-| Planner | `packages/opencode/src/agent` and `packages/opencode/src/session/processor.ts` |
-| Repository Intelligence | `packages/core/src/project`, `packages/core/src/git`, and `packages/opencode/src/lsp` |
-| Verification | `packages/opencode/src/tool` and session continuation handling |
-| Model Routing | `packages/opencode/src/session/llm.ts`, `packages/opencode/src/provider`, and `packages/llm/src/route` |
+| Planner | `packages/opencode/src/agent`, `packages/opencode/src/session/processor.ts` |
+| Repository intelligence | `packages/core/src/project`, `packages/core/src/git`, `packages/opencode/src/lsp` |
+| Verification | `packages/opencode/src/tool` and continuation handling |
+| Model routing | `packages/opencode/src/session/llm.ts`, `packages/opencode/src/provider`, `packages/llm/src/route` |
 
-## Extraction report
-
-The retained package graph above is the dependency report. Removed material includes all web/desktop/console/stats/documentation/SDK-extension/deployment packages, hosted infrastructure, Nix and CI configuration, examples, benchmarks, tests, snapshots, screenshots, and auxiliary release scripts. The only source assets carried across packages are the five notification sounds now owned by `packages/tui/src/assets/audio`.
-
-Build and runtime verification require Bun. This environment did not provide Bun on `PATH`, so `bun run --cwd packages/opencode src/index.ts --help` and `bun run --cwd packages/opencode typecheck` could not be executed here. No successful build or runtime claim is made until the commands in the build section pass on a Bun-equipped environment.
+These seams are retained but no Athena behavior is implemented here.
