@@ -53,7 +53,7 @@
     "@parcel/watcher-linux-x64-glibc": "2.5.1",
     "@parcel/watcher-linux-x64-musl": "2.5.1",
     "@parcel/watcher-win32-arm64": "2.5.1",
-    "@parcel/watcher-win32-x64": "2.5.1",
+    "@parcel/watcher-win32-x64": "2.5.1"
   },
   "dependencies": {
     "@ai-sdk/alibaba": "1.0.17",
