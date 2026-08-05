@@ -6,6 +6,14 @@ This is the CLI-only OpenCode runtime retained as the baseline for later Athena 
 
 The runtime is TypeScript executed and compiled by Bun 1.3.14; it is not a Go application.
 
+## Athena Migration
+
+Athena is being introduced as a separate Go core through one capability at a time. The architecture gate and all seven subsystem migration dossiers are in [docs/athena](docs/athena/index.md). No OpenCode runtime subsystem has been replaced. The first completed Athena capability is read-only repository inventory with durable SQLite file-hash snapshots.
+
+```sh
+(cd athena && go run ./cmd/athena index --repo .. --json)
+```
+
 ## Architecture
 
 `packages/opencode` is the composition root. Its commands use the location-scoped runtime, which loads configuration and durable state, starts the local server when needed, and exposes it through the SDK client. Provider requests are normalized by `llm`; session events drive both persistence and terminal output.
