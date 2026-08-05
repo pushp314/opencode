@@ -5,8 +5,7 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "typecheck": "tsgo --noEmit",
-    "build": "tsc"
+    "typecheck": "tsgo --noEmit"
   },
   "exports": {
     ".": "./src/index.ts",

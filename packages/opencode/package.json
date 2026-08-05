@@ -7,13 +7,8 @@
   "private": true,
   "scripts": {
     "typecheck": "tsgo --noEmit",
-    "test": "bun test --timeout 30000 --only-failures",
-    "test:httpapi": "bun run script/httpapi-exercise.ts --mode coverage --fail-on-missing --fail-on-skip && bun run script/httpapi-exercise.ts --mode auth --fail-on-missing --fail-on-skip && bun run script/httpapi-exercise.ts --mode effect --fail-on-missing --fail-on-skip",
-    "bench:test": "bun run script/bench-test-suite.ts",
-    "profile:test": "bun run script/profile-test-files.ts",
     "build": "bun run script/build.ts",
-    "dev": "bun run --conditions=browser ./src/index.ts",
-    "dev:temporary": "bun run --conditions=browser ./src/temporary.ts"
+    "dev": "bun run --conditions=browser ./src/index.ts"
   },
   "bin": {
     "opencode": "./bin/opencode"
@@ -32,8 +27,6 @@
     "@babel/core": "7.28.4",
     "@octokit/webhooks-types": "7.6.1",
     "@opencode-ai/core": "workspace:*",
-    "@opencode-ai/http-recorder": "workspace:*",
-    "@opencode-ai/script": "workspace:*",
     "@standard-schema/spec": "1.0.0",
     "@tsconfig/bun": "catalog:",
     "@types/babel__core": "7.20.5",

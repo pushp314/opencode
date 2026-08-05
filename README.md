@@ -1,129 +1,85 @@
-<p align="center">
-  <a href="https://opencode.ai">
-    <picture>
-      <source srcset="packages/console/app/src/asset/logo-ornate-dark.svg" media="(prefers-color-scheme: dark)">
-      <source srcset="packages/console/app/src/asset/logo-ornate-light.svg" media="(prefers-color-scheme: light)">
-      <img src="packages/console/app/src/asset/logo-ornate-light.svg" alt="OpenCode logo">
-    </picture>
-  </a>
-</p>
-<p align="center">The open source AI coding agent.</p>
-<p align="center">
-  <a href="https://opencode.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
-  <a href="https://www.npmjs.com/package/opencode-ai"><img alt="npm" src="https://img.shields.io/npm/v/opencode-ai?style=flat-square" /></a>
-  <a href="https://github.com/anomalyco/opencode/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/opencode/publish.yml?style=flat-square&branch=dev" /></a>
-</p>
+# Athena CLI Foundation
 
-<p align="center">
-  <a href="README.md">English</a> |
-  <a href="README.zh.md">简体中文</a> |
-  <a href="README.zht.md">繁體中文</a> |
-  <a href="README.ko.md">한국어</a> |
-  <a href="README.de.md">Deutsch</a> |
-  <a href="README.es.md">Español</a> |
-  <a href="README.fr.md">Français</a> |
-  <a href="README.it.md">Italiano</a> |
-  <a href="README.da.md">Dansk</a> |
-  <a href="README.ja.md">日本語</a> |
-  <a href="README.pl.md">Polski</a> |
-  <a href="README.ru.md">Русский</a> |
-  <a href="README.bs.md">Bosanski</a> |
-  <a href="README.ar.md">العربية</a> |
-  <a href="README.no.md">Norsk</a> |
-  <a href="README.br.md">Português (Brasil)</a> |
-  <a href="README.th.md">ไทย</a> |
-  <a href="README.tr.md">Türkçe</a> |
-  <a href="README.uk.md">Українська</a> |
-  <a href="README.bn.md">বাংলা</a> |
-  <a href="README.gr.md">Ελληνικά</a> |
-  <a href="README.vi.md">Tiếng Việt</a>
-</p>
+This repository is the CLI-only runtime extracted from OpenCode. It retains interactive and non-interactive command execution, configuration, providers, streaming, tools, durable sessions, the local HTTP control surface, and the OpenTUI terminal renderer. Web, desktop, hosted-console, documentation-site, extension, infrastructure, benchmark, test, and example products have been removed.
 
-[![OpenCode Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://opencode.ai)
+Athena is not implemented here. The current runtime remains functional and is deliberately kept as the migration baseline.
 
----
+## Build and development
 
-### Installation
+Install Bun 1.3.14, then run:
 
-```bash
-# YOLO
-curl -fsSL https://opencode.ai/install | bash
-
-# Package managers
-npm i -g opencode-ai@latest        # or bun/pnpm/yarn
-scoop install opencode             # Windows
-choco install opencode             # Windows
-brew install anomalyco/tap/opencode # macOS and Linux (recommended, always up to date)
-brew install opencode              # macOS and Linux (official brew formula, updated less)
-sudo pacman -S opencode            # Arch Linux (Stable)
-paru -S opencode-bin               # Arch Linux (Latest from AUR)
-mise use -g opencode               # Any OS
-nix run nixpkgs#opencode           # or github:anomalyco/opencode for latest dev branch
+```sh
+bun install
+bun run typecheck
+bun run dev -- --help
+bun run build
 ```
 
-> [!TIP]
-> Remove versions older than 0.1.x before installing.
+`bun run build` builds the current-platform CLI binary without embedding a browser UI. Run `bun run --cwd packages/opencode dev -- --help` for direct command discovery.
 
-### Desktop App (BETA)
+## Repository structure
 
-OpenCode is also available as a desktop application. Download directly from the [releases page](https://github.com/anomalyco/opencode/releases) or [opencode.ai/download](https://opencode.ai/download).
-
-| Platform              | Download                           |
-| --------------------- | ---------------------------------- |
-| macOS (Apple Silicon) | `opencode-desktop-mac-arm64.dmg`   |
-| macOS (Intel)         | `opencode-desktop-mac-x64.dmg`     |
-| Windows               | `opencode-desktop-windows-x64.exe` |
-| Linux                 | `.deb`, `.rpm`, or `.AppImage`     |
-
-```bash
-# macOS (Homebrew)
-brew install --cask opencode-desktop
-# Windows (Scoop)
-scoop bucket add extras; scoop install extras/opencode-desktop
+```text
+packages/
+  opencode/                 CLI entrypoint, commands, runtime composition, sessions, tools
+  tui/                      OpenTUI terminal renderer and interaction runtime
+  core/                     durable state, configuration, providers, filesystem and tool primitives
+  server/                   local CLI HTTP control surface
+  protocol/                 HTTP API contracts
+  schema/                   shared runtime schemas
+  llm/                      provider transport and stream normalization
+  plugin/                   plugin and terminal-extension contracts
+  codemode/                 confined code-execution tool runtime
+  sdk/js/                   local API client used by the CLI and TUI
+  effect-drizzle-sqlite/    SQLite Effect/Drizzle adapter
+  effect-sqlite-node/       Node SQLite adapter
+  script/                   build metadata helpers
+patches/                    required runtime dependency patches
 ```
 
-#### Installation Directory
+## CLI architecture and dependency graph
 
-The install script respects the following priority order for the installation path:
-
-1. `$OPENCODE_INSTALL_DIR` - Custom installation directory
-2. `$XDG_BIN_DIR` - XDG Base Directory Specification compliant path
-3. `$HOME/bin` - Standard user binary directory (if it exists or can be created)
-4. `$HOME/.opencode/bin` - Default fallback
-
-```bash
-# Examples
-OPENCODE_INSTALL_DIR=/usr/local/bin curl -fsSL https://opencode.ai/install | bash
-XDG_BIN_DIR=$HOME/.local/bin curl -fsSL https://opencode.ai/install | bash
+```text
+opencode CLI
+ ├─ terminal UI ─────────────── tui ──────── plugin, sdk
+ ├─ command/runtime/session ─── core ─────── schema, llm, plugin, SQLite adapters
+ ├─ streaming/model execution ─ llm ──────── schema
+ ├─ local control API ───────── server ───── core, protocol
+ ├─ API contracts ───────────── protocol ─── schema
+ ├─ sandboxed code tool ─────── codemode
+ └─ local API client ────────── sdk
 ```
 
-### Agents
+All edges above are runtime imports or package dependencies reachable from `packages/opencode/src/index.ts`. Provider SDKs remain because provider selection is dynamic configuration, so their reachability cannot be safely inferred from a single startup path.
 
-OpenCode includes two built-in agents you can switch between with the `Tab` key.
+## Startup sequence
 
-- **build** - Default, full-access agent for development work
-- **plan** - Read-only agent for analysis and code exploration
-  - Denies file edits by default
-  - Asks permission before running bash commands
-  - Ideal for exploring unfamiliar codebases or planning changes
+1. `packages/opencode/src/index.ts` parses CLI flags and selects a command.
+2. Command bootstrap creates a location-scoped runtime and loads configuration.
+3. The CLI starts its local server and connects the SDK client.
+4. TUI or run commands create/resume durable sessions.
+5. The session processor resolves an agent, tools, and provider, then consumes one normalized LLM event stream.
+6. Events update session state and render through OpenTUI.
 
-Also included is a **general** subagent for complex searches and multistep tasks.
-This is used internally and can be invoked using `@general` in messages.
+## Development workflow
 
-Learn more about [agents](https://opencode.ai/docs/agents).
+Keep changes inside the runtime dependency graph. Run `bun run typecheck` from the affected package and build the CLI after entrypoint, provider, session, server, or terminal changes. The repository intentionally has no in-tree test suite or browser build; validation is typecheck, binary build, and CLI smoke execution.
 
-### Documentation
+## Athena extension points
 
-For more info on how to configure OpenCode, [**head over to our docs**](https://opencode.ai/docs).
+These seams are retained, functional, and intentionally not replaced:
 
-### Contributing
+| Future Athena system | Current seam |
+| --- | --- |
+| Context Engine | `packages/core/src/system-context` and `packages/opencode/src/session/instruction.ts` |
+| Memory | `packages/opencode/src/session` durable state and prompts |
+| Planner | `packages/opencode/src/agent` and `packages/opencode/src/session/processor.ts` |
+| Repository Intelligence | `packages/core/src/project`, `packages/core/src/git`, and `packages/opencode/src/lsp` |
+| Verification | `packages/opencode/src/tool` and session continuation handling |
+| Model Routing | `packages/opencode/src/session/llm.ts`, `packages/opencode/src/provider`, and `packages/llm/src/route` |
 
-If you're interested in contributing to OpenCode, please read our [contributing docs](./CONTRIBUTING.md) before submitting a pull request.
+## Extraction report
 
-### Building on OpenCode
+The retained package graph above is the dependency report. Removed material includes all web/desktop/console/stats/documentation/SDK-extension/deployment packages, hosted infrastructure, Nix and CI configuration, examples, benchmarks, tests, snapshots, screenshots, and auxiliary release scripts. The only source assets carried across packages are the five notification sounds now owned by `packages/tui/src/assets/audio`.
 
-If you are working on a project that's related to OpenCode and is using "opencode" as part of its name, for example "opencode-dashboard" or "opencode-mobile", please add a note to your README to clarify that it is not built by the OpenCode team and is not affiliated with us in any way.
-
----
-
-**Join our community** [Discord](https://discord.gg/opencode) | [X.com](https://x.com/opencode)
+Build and runtime verification require Bun. This environment did not provide Bun on `PATH`, so `bun run --cwd packages/opencode src/index.ts --help` and `bun run --cwd packages/opencode typecheck` could not be executed here. No successful build or runtime claim is made until the commands in the build section pass on a Bun-equipped environment.
