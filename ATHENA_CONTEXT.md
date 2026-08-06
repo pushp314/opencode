@@ -8,11 +8,11 @@
 
 This repository is a Bun/TypeScript monorepo named `athena-cli-foundation` whose active runtime package is still OpenCode. Its root manifest describes it as a “CLI-only foundation extracted from OpenCode”; `packages/opencode/src/index.ts` registers the CLI and composes the application runtime. The repository also now contains a separate Go module at `athena/`, which is the beginning of the Athena Engineering Brain. [Evidence: `package.json`, `packages/opencode/src/index.ts`, `athena/go.mod`]
 
-OpenCode currently provides command parsing, configuration, local state, providers, sessions, tools, streaming, terminal rendering, a local HTTP server, plugins, Git integration, and an SDK. Athena currently provides exactly one production-tested capability: read-only, Git-aware repository inventory with deterministic SHA-256 file snapshots persisted in SQLite. It does not yet provide AST parsing, a knowledge graph, a context engine, Brain planning, Athena execution, verification orchestration, desktop UI, VS Code extension, LanceDB, or Ollama integration. [Evidence: `README.md`, `athena/repository/indexer.go`, `docs/athena/index.md`]
+OpenCode currently provides command parsing, configuration, local state, providers, sessions, tools, streaming, terminal rendering, a local HTTP server, plugins, Git integration, and an SDK. Athena currently provides two production-tested capabilities: read-only, Git-aware repository inventory with deterministic SHA-256 file snapshots persisted in SQLite, and read-only Tree-sitter symbol extraction stored as durable parse/symbol facts in the same SQLite database. It does not yet provide a knowledge graph, a context engine, Brain planning, Athena execution, verification orchestration, desktop UI, VS Code extension, LanceDB, or Ollama integration. [Evidence: `README.md`, `athena/repository/indexer.go`, `athena/repository/parse/`, `athena/repository/sqlite.go`, `docs/athena/index.md`]
 
 The runtime architecture is service-oriented TypeScript using Effect layers. `AppRuntime` composes configuration, auth, storage, providers, agents, sessions, LLM streaming, tools, project state, and related services. Project-specific state is location/directory scoped through `InstanceStore`. The new Athena architecture deliberately keeps its Go core independent so that future CLI, desktop, editor, API, and voice adapters do not own reasoning or side effects. [Evidence: `packages/opencode/src/effect/app-runtime.ts`, `packages/opencode/src/project/instance-store.ts`, `docs/athena/architecture.md`]
 
-Primary technologies currently present are Bun 1.3.14, TypeScript, Effect, SQLite/Drizzle adapters, OpenTUI/Solid terminal rendering, AI SDK provider packages, MCP, and a new Go 1.26.5 module using `modernc.org/sqlite`. The repository contains source references to network-capable provider, account, model-catalog, remote-config, web-fetch, and web-search systems; it is therefore **not currently cloud-free**. A static search found no `ollama` identifier in `packages/opencode/src`, so OpenCode’s current source does not document a native Ollama integration. [Evidence: `package.json`, `packages/opencode/package.json`, `athena/go.mod`, `packages/core/src/models-dev.ts`, `packages/opencode/src/config/config.ts`, `packages/opencode/src/tool/webfetch.ts`]
+Primary technologies currently present are Bun 1.3.14, TypeScript, Effect, SQLite/Drizzle adapters, OpenTUI/Solid terminal rendering, AI SDK provider packages, MCP, and a new Go 1.26.5 module using `modernc.org/sqlite` plus official CGO Tree-sitter grammars. The repository contains source references to network-capable provider, account, model-catalog, remote-config, web-fetch, and web-search systems; it is therefore **not currently cloud-free**. A static search found no `ollama` identifier in `packages/opencode/src`, so OpenCode’s current source does not document a native Ollama integration. [Evidence: `package.json`, `packages/opencode/package.json`, `athena/go.mod`, `packages/core/src/models-dev.ts`, `packages/opencode/src/config/config.ts`, `packages/opencode/src/tool/webfetch.ts`]
 
 ## 2. Repository Overview
 
@@ -22,7 +22,7 @@ Primary technologies currently present are Bun 1.3.14, TypeScript, Effect, SQLit
 .
 ├── athena/                         Go module; first Athena capability
 │   ├── cmd/athena/                 CLI adapter
-│   └── repository/                 Git-aware hash index and SQLite store
+│   └── repository/                 Git-aware hash index, Tree-sitter symbol facts, SQLite store
 ├── athena-migration/               Historical cleanup/migration reports
 ├── docs/athena/                    Athena architecture dossiers and review
 ├── packages/
@@ -54,12 +54,12 @@ Primary technologies currently present are Bun 1.3.14, TypeScript, Effect, SQLit
 | `packages/opencode/src/index.ts` | Registers yargs commands, global flags, help/version, middleware, error handling, and process exit | `packages/opencode/src/index.ts:1-135` |
 | `packages/opencode/bin/opencode` | Locates and launches the platform binary package | `packages/opencode/bin/opencode` |
 | `packages/opencode/script/build.ts` | Generates models data, compiles the current platform binary, and smoke-tests `--version` | `packages/opencode/script/build.ts` |
-| `athena/cmd/athena/main.go` | Athena Go CLI; currently supports `athena index` | `athena/cmd/athena/main.go` |
+| `athena/cmd/athena/main.go` | Athena Go CLI; currently supports `athena index` and `athena symbols` | `athena/cmd/athena/main.go` |
 | `packages/opencode/src/server/server.ts` | Programmatic local HTTP listener | `packages/opencode/src/server/server.ts` |
 
 ### Repository statistics
 
-At inspection, the repository contained **1,340 non-`node_modules` files** and **199,893 lines** across TypeScript/TSX/Go files. The largest source areas by line count were `packages/opencode` (80,507), `packages/core` (32,934), `packages/sdk/js` (30,143), and `packages/tui` (27,004). The Athena Go module had 640 Go lines at the same measurement. Counts are informative rather than a complexity score. [Evidence: repository file/line-count command executed during this inspection]
+At inspection, the repository contained **1,340 non-`node_modules` files** and **199,893 lines** across TypeScript/TSX/Go files. The largest source areas by line count were `packages/opencode` (80,507), `packages/core` (32,934), `packages/sdk/js` (30,143), and `packages/tui` (27,004). The Athena Go module had 7,390 Go lines at the same measurement. Counts are informative rather than a complexity score. [Evidence: repository file/line-count command executed during this inspection]
 
 ## 3. Technology Stack
 
@@ -74,7 +74,7 @@ At inspection, the repository contained **1,340 non-`node_modules` files** and *
 | Storage | SQLite-related Effect/Drizzle packages and OpenCode database service | `packages/core/package.json`, `packages/effect-*`, `packages/core/src/database/database.ts` |
 | Plugins/MCP | `@opencode-ai/plugin`, MCP SDK | `packages/plugin`, `packages/opencode/package.json` |
 | Build/task tooling | Bun, Turborepo, TypeScript native preview, package patches | `package.json`, `turbo.json`, `patches/` |
-| Athena core | Go 1.26.5; `modernc.org/sqlite` | `athena/go.mod` |
+| Athena core | Go 1.26.5; `modernc.org/sqlite`; official CGO Tree-sitter grammars | `athena/go.mod` |
 | Athena vector store | **not implemented** | No LanceDB dependency in `athena/go.mod` |
 | Athena local model gateway | **not implemented** | No Ollama source reference under `packages/opencode/src`; no Go Ollama package |
 | Tests | TypeScript root test script deliberately exits 1; Go has real repository index tests | `package.json`, `athena/repository/indexer_test.go` |
@@ -109,7 +109,7 @@ flowchart TD
 
 ### Athena CLI
 
-The current Athena CLI is intentionally smaller. `main` creates a signal-cancelled context, dispatches `index`, opens a SQLite database, constructs `repository.NewIndexer`, and emits text or JSON. The indexer uses `git ls-files -co --exclude-standard -z`, evaluates each Git-visible file, and persists a hash snapshot. [Evidence: `athena/cmd/athena/main.go`, `athena/repository/indexer.go`, `athena/repository/sqlite.go`]
+The current Athena CLI is intentionally smaller. `main` creates a signal-cancelled context and dispatches `index` or `symbols`. `index` opens a SQLite database, constructs `repository.NewIndexer`, and emits text or JSON; with `--parse` it also extracts symbol facts. `symbols` reads the durable symbols of the latest snapshot through `repository.NewQuery` with optional name/kind/path filters. The indexer uses `git ls-files -co --exclude-standard -z`, evaluates each Git-visible file, persists a hash snapshot, and when parsing is enabled reconciles missing parse facts with a bounded Tree-sitter worker pool. [Evidence: `athena/cmd/athena/main.go`, `athena/repository/indexer.go`, `athena/repository/sqlite.go`, `athena/repository/query.go`, `athena/repository/parse/`]
 
 ```mermaid
 sequenceDiagram
@@ -118,17 +118,23 @@ sequenceDiagram
   participant G as Git
   participant I as Indexer
   participant S as SQLite
-  U->>C: athena index --repo PATH
-  C->>I: Index(context, Ref)
+  U->>C: athena index --repo PATH [--parse]
+  C->>I: Index(context, Ref, IndexOptions)
   I->>G: ls-files -co --exclude-standard
   I->>I: canonicalize, inspect, hash, sort
   I->>S: compare latest snapshot
   alt unchanged
     S-->>I: reuse latest snapshot
+    Note over I: --parse: SaveParse backfill only
   else changed
-    I->>S: transactionally save snapshot and files
+    I->>I: reconcile parse facts (worker pool)
+    I->>S: transactionally save snapshot, files, facts
   end
   I-->>C: Report
+  C-->>U: text or JSON
+  U->>C: athena symbols --repo PATH [--name|--kind|--path]
+  C->>S: Query.Symbols (latest snapshot)
+  S-->>C: durable symbols
   C-->>U: text or JSON
 ```
 
@@ -189,7 +195,7 @@ The table records every workspace package and the Go Athena module. “Public AP
 | `effect-drizzle-sqlite` | Effect/Drizzle SQLite adapter | none | core | `src/index.ts` | High storage dependency; not safe to remove |
 | `effect-sqlite-node` | Node SQLite adapter | none | core | `src/index.ts` | High for Node-specific storage path; not safe to remove |
 | `script` | Version/channel/team build metadata | none | opencode build | `src/index.ts` | Build-critical; not safe to remove |
-| `athena` | New Go Engineering Brain module; currently repository hash inventory only | `modernc.org/sqlite` | no OpenCode runtime dependent | `cmd/athena`, `repository.Indexer`, `repository.Store` | Isolated and low blast radius; safe to extend under its dossier/review process; not safe to remove if Athena migration continues |
+| `athena` | New Go Engineering Brain module; repository hash inventory plus Tree-sitter symbol facts | `modernc.org/sqlite`; official Tree-sitter grammar Go bindings (CGO) | no OpenCode runtime dependent | `cmd/athena`, `repository.Indexer`, `repository.Store`, `repository.Query`, `repository/parse` | Isolated and low blast radius; safe to extend under its dossier/review process; not safe to remove if Athena migration continues |
 
 The package graph is acyclic at workspace-package level: `schema` is a leaf; `llm` and `protocol` depend on it; `core` depends on lower packages; `server` depends on `core` and `protocol`; `opencode` composes the runtime packages. Internal module cycles have been reported by a static scan and remain a documented limitation; exact cycle remediation is not performed in this context document. [Evidence: workspace manifests; `README.md` Known Limitations]
 
@@ -213,7 +219,20 @@ Context is currently assembled in session/LLM code from system prompts, messages
 
 [Evidence: `athena/repository/indexer.go`, `athena/repository/sqlite.go`]
 
-The accepted migration path is hash inventory → durable file knowledge → Tree-sitter facts → graphs → evidence retrieval. No source parser, symbol extraction, embeddings, or graph query exists in Go today. [Evidence: `docs/athena/01-repository-intelligence.md`, `docs/athena/reviews/01-repository-inventory.md`]
+`athena index --parse` is the second durable repository fact producer. It:
+
+- adds a `--parse` option to `Index(ctx, Ref, IndexOptions{Parse, Workers})` and a `parsed`/`parse_errors`/`symbols` count to the report;
+- runs a bounded Tree-sitter worker pool (`maxParseWorkers = 8`, defaulting to `GOMAXPROCS`, capped to candidate count) that parses only files whose content has no durable parse fact;
+- maps file extensions to eight official grammars (Go, TypeScript/TSX, JavaScript/JSX/MJS/CJS, Python, Rust, Java, C, C++) and skips unsupported languages so new grammars can backfill later;
+- extracts named declarations (function, method, class, struct, interface, enum, type, const, var) with 1-based lines and byte offsets via compile-time-verified Tree-sitter queries;
+- stores parse rows keyed by `(repository_id, path, sha256)` plus a `symbols` table; unchanged snapshots that opt into `--parse` backfill via `SaveParse` without re-writing snapshot rows;
+- keeps the snapshot ID and reuse behavior independent of parse output, so parse facts never change the deterministic identity of a snapshot.
+
+`athena symbols` reads the symbols of the latest snapshot with optional exact name/kind and exact full-path filters, ordered by path and byte offset.
+
+[Evidence: `athena/repository/indexer.go`, `athena/repository/parse/parse.go`, `athena/repository/parse/extract.go`, `athena/repository/parse/grammars.go`, `athena/repository/sqlite.go`, `athena/repository/query.go`, `athena/cmd/athena/main.go`]
+
+The accepted migration path is hash inventory → durable file knowledge → Tree-sitter facts → graphs → evidence retrieval. The first Tree-sitter facts milestone is complete: symbol extraction for eight languages, durable and queryable. Qualified type resolution, import edges, call/reference graphs, and embeddings are not yet implemented. [Evidence: `docs/athena/01-repository-intelligence.md`, `docs/athena/reviews/01-repository-inventory.md`]
 
 ## 8. Agent Flow
 
@@ -410,6 +429,7 @@ Call graph detail is intentionally limited to verified public/coordinator calls 
 | Web search/fetch, cloud providers, account integrations | Available but not local-first | Source/packages present; use requires configuration and may network |
 | Code mode | Experimental/optional | Loaded only under `experimentalCodeMode` flag in `ToolRegistry` |
 | Athena repository hash index | First accepted Athena capability | `athena/repository`; real Git/SQLite tests and benchmark |
+| Athena Tree-sitter symbol facts | Second accepted Athena capability | `athena/repository/parse`; eight grammars, durable `parses`/`symbols` rows, `athena symbols` query; tests, fuzz, race, benchmark |
 | Athena AST/index graph/context/Brain/execution/verification | Incomplete/not implemented | Dossiers exist but source packages do not |
 | Athena Ollama/LanceDB/Desktop/VS Code | Not implemented | No implementation packages/dependencies |
 | Legacy generated or dynamic plugin behavior | Unknown reachability | Configuration/plugin discovery is dynamic; removal not justified |
@@ -426,7 +446,7 @@ Verified technical debt/cleanup facts:
 - a static module scan previously reported internal cycles, while the workspace package graph is acyclic;
 - OpenCode depends on many provider and UI packages inconsistent with Athena’s eventual local-first minimum;
 - OpenCode configuration can load remote/account-managed content and install plugin dependencies;
-- Athena currently lacks parser/graph/context/model/verification layers.
+- Athena currently lacks qualified-type/import/edge graphs, context, model, and verification layers.
 
 Unused dependency status is **unknown** without package-aware static and runtime reachability analysis. [Evidence: `package.json`, `README.md`, `packages/opencode/src/config/config.ts`, `docs/athena/`]
 
@@ -493,6 +513,9 @@ This is the desired state specified by the Athena dossiers, not a statement of p
 | Athena SQLite is canonical | Inspectable transactional local source of truth; vector data becomes derived | `docs/athena/architecture.md`, `athena/repository/sqlite.go` | None planned |
 | Athena inventory is Git-aware/read-only first | Establishes trusted repository identity before semantic interpretation; excludes non-Git repositories today | `athena/repository/indexer.go`, `docs/athena/reviews/01-repository-inventory.md` | Later add explicit non-Git repository policy if required |
 | Athena snapshots are SHA-256 file facts | Deterministic incremental invalidation; reads all eligible files sequentially | `athena/repository/indexer.go` | Add bounded parser concurrency only after benchmarked migration |
+| Athena symbol extraction uses official CGO Tree-sitter bindings | Reference-correct parses from org-maintained grammars; requires CGO and explicit `Close()` on parser/tree/query/cursor objects | `athena/go.mod`, `athena/repository/parse/grammars.go`, `athena/repository/parse/parse.go` | Pure-Go bindings if CGO becomes a distribution constraint; grammars must be vendored |
+| Parse facts never change snapshot identity | Snapshot IDs hash only (repository ID, fingerprint); parse rows key by content SHA-256 so unchanged content is never re-parsed | `athena/repository/indexer.go`, `athena/repository/sqlite.go` | None planned |
+| Parse work is bounded and race-safe | Worker pool capped at 8, deterministic output order, early error abort, race-tested | `athena/repository/indexer.go`, `athena/repository/parse/parse_fuzz_test.go` | None planned |
 
 No exhaustive list of every architectural decision in ~200k source lines can be guaranteed from this inspection. The decisions above are those directly evidenced by composition roots, documented rules, and current Athena code.
 
@@ -506,8 +529,9 @@ No exhaustive list of every architectural decision in ~200k source lines can be 
 
 ### Performance and operational
 
-- Athena inventory hashes every eligible Git-visible file sequentially; large repositories may be slow until a separately benchmarked incremental parser stage exists. [Evidence: `athena/repository/indexer.go`]
+- Athena inventory hashes every eligible Git-visible file sequentially; large repositories may be slow until further optimization. Tree-sitter parsing is incremental (only changed/never-parsed content) and bounded to 8 workers, so cold parse cost is paid once per content hash. [Evidence: `athena/repository/indexer.go`]
 - OpenCode has large source packages and many provider dependencies, affecting install/build footprint. [Evidence: statistics in Section 2; manifests]
+- Athena symbol extraction requires CGO (official Tree-sitter bindings); the module no longer builds with `CGO_ENABLED=0`. Parser/tree/query/cursor objects must be `Close()`d to avoid Finalizer/CGO issues. [Evidence: `athena/go.mod`, `athena/repository/parse/`]
 - Ollama deployment/model availability is a runtime prerequisite, not implemented or validated in repository code. [Evidence: absent Athena model adapter]
 
 ### Security
@@ -530,7 +554,7 @@ Verified debt and constraints:
 2. Root `npm`/Bun `test` intentionally exits with failure; only the new Go capability currently has in-tree tests.
 3. Internal OpenCode module cycles remain documented.
 4. The CLI foundation retains cloud/network-capable provider/config/tool paths despite Athena’s target local-first policy.
-5. Athena has only file-hash inventory; all higher reasoning and knowledge layers are absent.
+5. Athena has only file-hash inventory plus Tree-sitter symbol facts; all graph/context/Brain reasoning and knowledge layers are absent.
 6. `Tool.Metadata` and some session/transform code use `any`; this is an observed type-safety debt, not a claim of runtime unsafety. [Evidence: `packages/opencode/src/tool/tool.ts`, `packages/opencode/src/session/processor.ts`, `packages/opencode/src/provider/transform.ts`]
 7. Repository-wide dead-code, duplicate-code, and unused-dependency assertions remain **unknown** without the planned Athena parser/graph analyzer and dynamic runtime tracing.
 
@@ -540,9 +564,9 @@ Do not “fix” these by bulk deletion or architectural rewrite. The accepted m
 
 ### Immediate priorities
 
-1. Preserve the reviewed Athena inventory as the only new runtime behavior.
-2. Add the next repository-intelligence capability only after its own interface, test corpus, benchmark, review, and migration note: Tree-sitter parsing and durable file/symbol facts.
-3. Define Athena data/config locations, versioned SQLite migrations, and repository selection policy before storing more than hashes.
+1. Preserve the reviewed Athena inventory and Tree-sitter symbol facts as the only new runtime behavior.
+2. Add the next repository-intelligence capability only after its own interface, test corpus, benchmark, review, and migration note: qualified-type resolution and durable import/edge facts.
+3. Define Athena data/config locations, versioned SQLite migrations, and repository selection policy before storing more than hashes and symbols.
 4. Add a local Ollama prerequisite/doctor capability only after documenting its model discovery, offline behavior, and no-cloud enforcement.
 
 ### Medium term
@@ -582,11 +606,13 @@ Athena is intended to become a local-first Engineering Brain: repository underst
 - OpenCode remains the functional Bun/TypeScript CLI foundation.
 - Athena documentation gate exists for seven systems.
 - Athena repository inventory is implemented, tested with real Git/SQLite, race-tested, benchmarked, and reviewed.
+- Athena Tree-sitter symbol facts are implemented, tested (table, malformed-input, determinism, race, fuzz), benchmarked, and reviewed; `athena symbols` queries durable facts.
 - No OpenCode subsystem has been replaced by Athena.
 
 ### Known problems and constraints
 
-- No Athena parser/graph/context/Brain/Ollama/LanceDB/execution/verification/UI implementation exists.
+- No Athena graph/context/Brain/Ollama/LanceDB/execution/verification/UI implementation exists.
+- Athena symbol extraction depends on CGO Tree-sitter bindings; Swift and other unsupported languages are skipped by design.
 - OpenCode contains dynamic/plugin/provider/cloud-capable features; do not represent it as cloud-free.
 - Root TypeScript tests are not runnable as a passing suite.
 - Internal module cycles remain.
@@ -603,11 +629,12 @@ Athena is intended to become a local-first Engineering Brain: repository underst
 - Keep OpenCode working while Athena is additive.
 - Treat `athena/` as an independent Go module.
 - First Athena fact is a Git-aware SHA-256 file snapshot.
+- Symbol facts come from official CGO Tree-sitter grammars and never change snapshot identity.
 - Do not introduce a model or execution path until their documented subsystem contract is implemented and verified.
 
 ### Next task
 
-The next valid task is a single Repository Intelligence increment: Tree-sitter parsing plus durable parse/symbol facts, with a new migration review. Do not begin Knowledge, Context, Brain, Execution, or UI replacement in the same change.
+The next valid task is a single Repository Intelligence increment: qualified-type resolution and durable import/edge facts, with a new migration review. Do not begin Knowledge, Context, Brain, Execution, or UI replacement in the same change.
 
 ### Important unknowns
 
@@ -631,6 +658,8 @@ The next valid task is a single Repository Intelligence increment: Tree-sitter p
 | Permission ruleset | Allow/deny/ask rules evaluated against permission and pattern |
 | MCP | Model Context Protocol integration used for external tools/servers |
 | Snapshot (Athena) | Immutable SQLite record of a repository fingerprint and its file facts |
+| Parse fact | Durable Tree-sitter extraction result keyed by `(repository_id, path, content SHA-256)` |
+| Symbol fact | Durable named-declaration record (name, kind, byte/line ranges) resolved to its file and snapshot |
 | Repository ID | SHA-256 of canonical repository root in the current Athena implementation |
 | Fingerprint | SHA-256 of ordered `path/hash/size` file records |
 | Evidence | Source-addressable fact with provenance; target Athena unit of trust |
@@ -650,7 +679,7 @@ The next valid task is a single Repository Intelligence increment: Tree-sitter p
 5. `packages/opencode/src/effect/app-runtime.ts` and `project/instance-store.ts` for lifecycle/dependency composition.
 6. `config/config.ts`, `provider/provider.ts`, `session/llm.ts`, `session/session.ts`, `session/processor.ts`, `tool/registry.ts`, and `permission/index.ts` for the active OpenCode runtime.
 7. `docs/athena/architecture.md` and the seven dossiers for the intended Athena boundaries.
-8. `athena/cmd/athena/main.go`, `athena/repository/indexer.go`, `sqlite.go`, tests, and review for the only implemented Athena capability.
+8. `athena/cmd/athena/main.go`, `athena/repository/indexer.go`, `sqlite.go`, `query.go`, `repository/parse/`, tests, and reviews for the only implemented Athena capabilities.
 9. `athena-migration/` only for historical context; do not treat it as current executable design.
 
 When modifying any subsystem, update this document with the concrete evidence, state transition, tests, benchmark results, migration decision, and remaining unknowns. Do not convert unknowns into inferred facts.

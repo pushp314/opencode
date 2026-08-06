@@ -35,6 +35,14 @@ RepositoryQuery.Impact(ctx, SnapshotID, ChangeSet) (ImpactReport, error)
 
 First capability: an explicit CLI command that inventories a selected repository and persists file hashes only. It is read-only, independently useful, and establishes repository identity and incremental invalidation. Tree-sitter symbols follow only after hash-index correctness is verified.
 
+## Milestone Status
+
+- **Inventory (hash facts): implemented and reviewed.** `athena index` persists deterministic SHA-256 snapshots; see `reviews/01-repository-inventory.md`.
+- **Symbol facts: implemented and reviewed.** `athena index --parse` extracts named declarations for Go, TypeScript/TSX, JavaScript, Python, Rust, Java, C, and C++ into durable `parses`/`symbols` rows; `athena symbols` queries the latest snapshot. See `reviews/02-tree-sitter-symbol-facts.md`.
+- **Import facts: implemented and reviewed.** `athena index --parse` also extracts module/package/header references into durable `imports` rows; `athena imports` queries the latest snapshot. This is the durable-reference slice of the "qualified-type resolution and durable import/edge facts" increment; see `reviews/03-durable-imports.md`.
+- **Import graph edges: implemented and reviewed.** Relative TS/JS and C-family include references resolve to same-snapshot files as durable `import_edges` rows; `athena edges` queries the latest snapshot. See `reviews/04-import-graph.md`.
+- **Next increment:** qualified-type resolution and language-specific module resolution (Python `from .` relative, Rust `use`, Go `go.mod` module mapping), with its own dossier/implementation/verification/benchmark/review before it may be consumed.
+
 ## Dependency Graph
 
 ```mermaid

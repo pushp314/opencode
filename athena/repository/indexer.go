@@ -9,10 +9,19 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/pushp314/opencode/athena/repository/parse"
 )
+
+// maxParseWorkers bounds the number of files parsed concurrently so that a
+// repository index never consumes unbounded CPU.
+const maxParseWorkers = 8
 
 type Ref struct {
 	Root string
@@ -42,16 +51,52 @@ type Report struct {
 	Changed      int       `json:"changed"`
 	Skipped      int       `json:"skipped"`
 	Reused       bool      `json:"reused"`
+	Parsed       int       `json:"parsed"`
+	ParseErrors  int       `json:"parse_errors"`
+	Symbols      int       `json:"symbols"`
+	Imports      int       `json:"imports"`
+	Edges        int       `json:"edges"`
 	CompletedAt  time.Time `json:"completed_at"`
+}
+
+// IndexOptions bounds an index run. Parse enables durable parse and symbol
+// facts; Workers bounds parse concurrency and defaults to a fixed bound.
+type IndexOptions struct {
+	Parse   bool
+	Workers int
+}
+
+// ParseKey identifies one file content in the parse cache.
+type ParseKey struct {
+	Path   string
+	SHA256 string
+}
+
+// ParseFact is the durable result of parsing one file. Skipped facts are the
+// result of a file changing after hashing and are never persisted.
+type ParseFact struct {
+	Path      string
+	SHA256    string
+	Language  string
+	HasErrors bool
+	Symbols   []parse.Symbol
+	Imports   []parse.Import
+	Skipped   bool
 }
 
 type Store interface {
 	Latest(context.Context, string) (Snapshot, []File, bool, error)
-	Save(context.Context, string, string, Snapshot, []File) error
+	Save(context.Context, string, string, Snapshot, []File, []ParseFact) error
+	ParsedSet(context.Context, string) (map[ParseKey]struct{}, error)
+	SaveParse(context.Context, string, []ParseFact) error
+	Symbols(context.Context, string, SymbolQuery) ([]Symbol, error)
+	Imports(context.Context, string, ImportQuery) ([]Import, error)
+	SaveEdges(context.Context, string, string, []Edge) error
+	Edges(context.Context, string, EdgeQuery) ([]Edge, error)
 }
 
 type Indexer interface {
-	Index(context.Context, Ref) (Report, error)
+	Index(context.Context, Ref, IndexOptions) (Report, error)
 }
 
 type indexer struct {
@@ -62,7 +107,7 @@ func NewIndexer(store Store) Indexer {
 	return indexer{store: store}
 }
 
-func (i indexer) Index(ctx context.Context, ref Ref) (Report, error) {
+func (i indexer) Index(ctx context.Context, ref Ref, options IndexOptions) (Report, error) {
 	root, err := normalizeRoot(ref.Root)
 	if err != nil {
 		return Report{}, err
@@ -103,20 +148,37 @@ func (i indexer) Index(ctx context.Context, ref Ref) (Report, error) {
 	}
 	changed := changedCount(previousFiles, files)
 	completedAt := time.Now().UTC()
-	if found && changed == 0 {
-		return Report{
-			SnapshotID:   latest.ID,
-			RepositoryID: repositoryID,
-			Root:         root,
-			Revision:     latest.Revision,
-			Files:        len(files),
-			Changed:      0,
-			Skipped:      skipped,
-			Reused:       true,
-			CompletedAt:  completedAt,
-		}, nil
-	}
 
+	report := Report{
+		RepositoryID: repositoryID,
+		Root:         root,
+		Files:        len(files),
+		Changed:      changed,
+		Skipped:      skipped,
+		CompletedAt:  completedAt,
+	}
+	var facts []ParseFact
+	if options.Parse {
+		facts, err = i.reconcileParses(ctx, root, repositoryID, files, options.Workers)
+		if err != nil {
+			return Report{}, err
+		}
+		report.Parsed, report.ParseErrors, report.Symbols, report.Imports = summarizeFacts(facts)
+	}
+	if found && changed == 0 {
+		if options.Parse {
+			if err := i.store.SaveParse(ctx, repositoryID, facts); err != nil {
+				return Report{}, err
+			}
+			if report.Edges, err = i.resolveEdges(ctx, repositoryID, latest.ID, files); err != nil {
+				return Report{}, err
+			}
+		}
+		report.SnapshotID = latest.ID
+		report.Revision = latest.Revision
+		report.Reused = true
+		return report, nil
+	}
 	snapshot := Snapshot{
 		ID:           digest(repositoryID + "\n" + fingerprint),
 		RepositoryID: repositoryID,
@@ -124,19 +186,168 @@ func (i indexer) Index(ctx context.Context, ref Ref) (Report, error) {
 		Fingerprint:  fingerprint,
 		CreatedAt:    completedAt,
 	}
-	if err := i.store.Save(ctx, repositoryID, root, snapshot, files); err != nil {
+	if err := i.store.Save(ctx, repositoryID, root, snapshot, files, facts); err != nil {
 		return Report{}, err
 	}
-	return Report{
-		SnapshotID:   snapshot.ID,
-		RepositoryID: repositoryID,
-		Root:         root,
-		Revision:     revision,
-		Files:        len(files),
-		Changed:      changed,
-		Skipped:      skipped,
-		CompletedAt:  completedAt,
+	report.SnapshotID = snapshot.ID
+	report.Revision = revision
+	if options.Parse {
+		if report.Edges, err = i.resolveEdges(ctx, repositoryID, snapshot.ID, files); err != nil {
+			return Report{}, err
+		}
+	}
+	return report, nil
+}
+
+// resolveEdges derives the cross-file import graph for a snapshot from its
+// complete import set and persists it. The snapshot's imports are loaded after
+// parse facts are saved so that edges cover unchanged as well as recently
+// parsed content.
+func (i indexer) resolveEdges(ctx context.Context, repositoryID string, snapshotID string, files []File) (int, error) {
+	imports, err := i.store.Imports(ctx, snapshotID, ImportQuery{})
+	if err != nil {
+		return 0, err
+	}
+	edges := resolveImports(files, imports)
+	if err := i.store.SaveEdges(ctx, repositoryID, snapshotID, edges); err != nil {
+		return 0, err
+	}
+	return len(edges), nil
+}
+
+// reconcileParses parses every file in the snapshot whose content has no
+// durable parse fact yet. Unsupported languages are skipped and are retried
+// on later runs so that new grammars can backfill without migration.
+func (i indexer) reconcileParses(ctx context.Context, root string, repositoryID string, files []File, workers int) ([]ParseFact, error) {
+	parsed, err := i.store.ParsedSet(ctx, repositoryID)
+	if err != nil {
+		return nil, err
+	}
+	candidates := make([]File, 0, len(files))
+	for _, file := range files {
+		if _, ok := parsed[ParseKey{Path: file.Path, SHA256: file.SHA256}]; ok {
+			continue
+		}
+		if _, ok := parse.Detect(file.Path); !ok {
+			continue
+		}
+		candidates = append(candidates, file)
+	}
+	return i.parseFiles(ctx, root, candidates, workers)
+}
+
+func (i indexer) parseFiles(ctx context.Context, root string, files []File, workers int) ([]ParseFact, error) {
+	if len(files) == 0 {
+		return nil, nil
+	}
+	if workers <= 0 {
+		workers = runtime.GOMAXPROCS(0)
+	}
+	workers = min(workers, len(files), maxParseWorkers)
+	jobs := make(chan File)
+	results := make(chan ParseFact)
+	var group sync.WaitGroup
+	var errored atomic.Bool
+	var mutex sync.Mutex
+	var firstErr error
+	for range workers {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			for file := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+				if errored.Load() {
+					continue
+				}
+				fact, err := i.parseFile(root, file)
+				if err != nil {
+					mutex.Lock()
+					if !errored.Load() {
+						errored.Store(true)
+						firstErr = err
+					}
+					mutex.Unlock()
+					continue
+				}
+				results <- fact
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for _, file := range files {
+			select {
+			case jobs <- file:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	go func() {
+		group.Wait()
+		close(results)
+	}()
+	facts := []ParseFact{}
+	for fact := range results {
+		facts = append(facts, fact)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	sort.Slice(facts, func(left, right int) bool {
+		return facts[left].Path < facts[right].Path
+	})
+	return facts, nil
+}
+
+func (i indexer) parseFile(root string, file File) (ParseFact, error) {
+	path := filepath.Join(root, file.Path)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return ParseFact{}, fmt.Errorf("read %s for parsing: %w", file.Path, err)
+	}
+	if hashBytes(content) != file.SHA256 {
+		return ParseFact{Path: file.Path, SHA256: file.SHA256, Skipped: true}, nil
+	}
+	lang, _ := parse.Detect(file.Path)
+	result := lang.Parse(content)
+	return ParseFact{
+		Path:      file.Path,
+		SHA256:    file.SHA256,
+		Language:  result.Language,
+		HasErrors: result.HasErrors,
+		Symbols:   result.Symbols,
+		Imports:   result.Imports,
 	}, nil
+}
+
+func summarizeFacts(facts []ParseFact) (parsed int, parseErrors int, symbols int, imports int) {
+	for _, fact := range facts {
+		if fact.Skipped {
+			continue
+		}
+		parsed++
+		if fact.HasErrors {
+			parseErrors++
+		}
+		symbols += len(fact.Symbols)
+		imports += len(fact.Imports)
+	}
+	return parsed, parseErrors, symbols, imports
+}
+
+// RepositoryID canonicalizes a repository root and returns its stable ID.
+func RepositoryID(input string) (string, error) {
+	root, err := normalizeRoot(input)
+	if err != nil {
+		return "", err
+	}
+	return digest(root), nil
 }
 
 func normalizeRoot(input string) (string, error) {
@@ -261,6 +472,11 @@ func fileFingerprint(files []File) string {
 
 func digest(value string) string {
 	hash := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(hash[:])
+}
+
+func hashBytes(content []byte) string {
+	hash := sha256.Sum256(content)
 	return hex.EncodeToString(hash[:])
 }
 

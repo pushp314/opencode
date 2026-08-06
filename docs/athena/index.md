@@ -11,4 +11,4 @@ The documentation gate is complete when each dossier contains the current archit
 7. [Verification](06-verification.md)
 8. [User Interfaces](07-user-interfaces.md)
 
-The first implementation capability is repository inventory with durable file hashes. Its implementation and engineering review are recorded in [Repository Inventory Review](reviews/01-repository-inventory.md). It is intentionally read-only and does not replace an OpenCode runtime subsystem.
+The first implementation capability is repository inventory with durable file hashes, reviewed in [Repository Inventory Review](reviews/01-repository-inventory.md). The second is Tree-sitter symbol extraction with durable parse/symbol facts, reviewed in [Tree-sitter Symbol Facts Review](reviews/02-tree-sitter-symbol-facts.md). Both are intentionally read-only and do not replace an OpenCode runtime subsystem.

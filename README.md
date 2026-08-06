@@ -8,11 +8,17 @@ The runtime is TypeScript executed and compiled by Bun 1.3.14; it is not a Go ap
 
 ## Athena Migration
 
-Athena is being introduced as a separate Go core through one capability at a time. The architecture gate and all seven subsystem migration dossiers are in [docs/athena](docs/athena/index.md). No OpenCode runtime subsystem has been replaced. The first completed Athena capability is read-only repository inventory with durable SQLite file-hash snapshots.
+Athena is being introduced as a separate Go core through one capability at a time. The architecture gate and all seven subsystem migration dossiers are in [docs/athena](docs/athena/index.md). No OpenCode runtime subsystem has been replaced. The completed Athena capabilities are read-only repository inventory with durable SQLite file-hash snapshots, read-only Tree-sitter symbol extraction with durable parse/symbol facts, durable import references, and cross-file import graph edges.
 
 ```sh
 (cd athena && go run ./cmd/athena index --repo .. --json)
+(cd athena && go run ./cmd/athena index --repo .. --parse)      # extract symbol, import, and edge facts
+(cd athena && go run ./cmd/athena symbols --repo .. --kind struct)
+(cd athena && go run ./cmd/athena imports --repo .. --kind include)
+(cd athena && go run ./cmd/athena edges --repo .. --path src/app.ts)
 ```
+
+The Athena module requires CGO for the official Tree-sitter grammar bindings; `index --parse` parses Go, TypeScript/TSX, JavaScript, Python, Rust, Java, C, and C++, and `symbols`, `imports`, and `edges` query the stored facts.
 
 ## Architecture
 
